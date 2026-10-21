@@ -36,6 +36,10 @@ from pathlib import Path
 # design/mechanism/scene-recommendation layer).
 import mechanisms as mechanisms_mod
 
+# Remote-first sync client (imported for the `sync` subcommand; streams derived
+# data to a refcode-server instead of building a local 15GB FTS index).
+import refcode_sync as refcode_sync_mod
+
 # --------------------------------------------------------------------------- #
 # Schema (single source of truth; references/refcode.sql mirrors it)
 # --------------------------------------------------------------------------- #
@@ -1227,15 +1231,16 @@ def build_parser() -> argparse.ArgumentParser:
     pv.set_defaults(func=cmd_verify)
 
     mechanisms_mod.build_mech_parser(sub)
+    refcode_sync_mod.build_sync_parser(sub)
 
     return p
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    if args.cmd == "mechanisms":
-        # mechanisms keeps its own mechanisms.db; it must NOT force-open the
-        # large refcode.db (only opens it read-only when anchoring impls).
+    if args.cmd in ("mechanisms", "sync"):
+        # mechanisms keeps its own mechanisms.db; sync streams to a remote
+        # refcode-server. Neither must force-open the large refcode.db.
         return args.func(args, None)
     conn = open_db(Path(args.db) if args.db else None)
     try:

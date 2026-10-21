@@ -10,7 +10,7 @@ and no daemon: **one SQLite file**. It exists so a coding or analysis agent can
 answer *"how did project X implement Y?"* with a real `file:line`, the way XERJ's
 own contributors do (`xerj search` / `xerj def`).
 
-## The six capabilities
+## The seven capabilities
 
 | verb | what it does | XERJ origin |
 |---|---|---|
@@ -20,6 +20,7 @@ own contributors do (`xerj search` / `xerj def`).
 | **query** | **docs arm first** (design/mechanism docs, see below) **+** exact symbol lookup **+** BM25 over body windows (FTS5) | `xccode::run_code_query` (`passage.rs`, `fields.rs`) |
 | **docs** | add/list design & mechanism-level docs (repo-map Op2/Op3/Op4 artifacts, work-log analyses) into `ref_docs`, searchable by the `query` docs-arm | — (new; `ref_docs` mirrors `analysis.db`'s `analysis_docs`) |
 | **mechanisms** | mechanism-level knowledge system (own `mechanisms.db`): curated abstract mechanisms (A1-A29 domains) with definition/scenes/pros/cons + **real code implementation anchors** (module + symbol + file:line from the refcode corpus) + **fused real-world project instances** (every analyzed project from `analysis.db`, bridged by paradigm domain, carrying mechanism summary + work-log doc path) + **scene → ranked mechanism recommendation** | — (new; independent of the code index) |
+| **sync** | **remote-first sync** (`refcode-server`): push derived data (symbols + window text) to a shared HTTP server that rebuilds the FTS index remotely, so a client never builds a local 15GB `refcode.db`. Remote-failure → metadata-only local queue → `flush` re-pushes. Multi-user / multi-instance concurrent. | — (new; `refcode_sync.py` client + `refcode-server.ts`) |
 
 **Docs arm** — `ref_docs` holds the content that answers *"what mechanisms / how
 does it work / what's the design"* questions the code index cannot: repo-map
@@ -105,6 +106,12 @@ $R mechanisms show a2a-protocol             # definition + scenes + code anchors
 $R mechanisms recommend "做多agent协作" -k 5   # scene -> ranked mechanisms (fit-dominant, projects= support count)
 $R mechanisms recommend "agent间安全传上下文" -k 5
 $R mechanisms scene list                    # curated scenes; scene add <id> --desc --domain --keywords
+
+# 8) remote-first sync (no local 15GB FTS; server is the corpus source of truth)
+$R sync push <slug> <path> --licence MIT     # extract + push derived data to server, then verify
+$R sync verify <slug>                        # confirm symbols/windows/files match on remote
+$R sync flush                                # re-push projects queued during a remote outage
+$R sync status                               # what's pending (metadata-only fallback queue)
 ```
 
 ## Where the database lives
@@ -147,6 +154,63 @@ Concurrency: SQLite WAL (multi-reader + single-writer, `busy_timeout`), and each
 project_name)`** — so N workers submitting the same analysis dedupe idempotently,
 and different workers can each add their own project analyses to the shared base.
 Port/DB overrides: `MECH_PORT`, `MECH_DB`.
+
+**`refcode-server` (remote corpus + sync service)** — a Bun service
+(`refcode-server.ts`) that is the **remote-first home for the code index**. It
+lets a client answer *"how did project X implement Y"* **without building the
+local 15GB `refcode.db`**: the client pushes derived data (symbols + window
+text, gzip-compressed) and the server rebuilds the trigram FTS remotely. This
+is the "清空本地大文件 / 远程优先" storage model — local never holds the giant
+FTS; the server is the single source of truth for the corpus.
+
+```bash
+bun /root/.agents/skills/refcode/refcode-server.ts --port 8788
+# or detached: systemd-run --unit=refcode-server --collect --setenv=REFCODE_DB=/srv/refcode.db \
+#   /root/.bun/bin/bun /root/.agents/skills/refcode/refcode-server.ts --port 8788
+```
+
+| method | path | what it does |
+|---|---|---|
+| `GET` | `/health` | liveness + corpus/mechanism counts |
+| `GET` | `/projects` | list all indexed projects |
+| `POST` | `/projects/<slug>/push?client=<id>` | upsert one project from NDJSON body (`project`/`symbol`/`window`/`end` lines) in one transaction; rebuilds that project's FTS from window text |
+| `GET` | `/projects/<slug>/manifest` | project manifest + `push_log` (sha, symbol/window/file counts) for client `verify` |
+| `GET` | `/query?text=<t>&k=<n>[&project=<s>]` | search (symbol + body arm) across the remote corpus |
+| `GET` | `/def?name=<n>[&project=<s>]` | exact symbol definition (file:line + signature) |
+| *(also serves the `mechanisms` endpoints above)* | | same `mechanisms-server` API on the same port |
+
+Concurrency / multi-user: SQLite WAL (multi-reader + single-writer,
+`busy_timeout`). Each `/push` is **one transaction** that deletes the slug's old
+symbol+window rows then bulk-inserts the new ones and rebuilds that project's
+FTS from the pushed window text — so a project is either fully replaced or not
+at all (crash-safe), and N clients pushing the same slug converge to
+last-write-wins. Port/DB overrides: `REFCODE_PORT`, `REFCODE_DB`, `MECH_DB`.
+
+**`sync` client (`refcode_sync.py`, wired in as `refcode sync ...`)** — the
+remote-first workflow:
+
+```bash
+$R sync push <slug> <path> [--url U --sha S --licence L]   # extract+push derived data; verify; clear local
+$R sync verify <slug>          # manifest compare (symbols/windows/files vs remote)
+$R sync clear <slug>           # delete local source + local DB rows (remote unaffected)
+$R sync flush                  # re-push queued projects (after remote recovers)
+$R sync status                 # show pending queue
+```
+
+**Remote-first + failure fallback:** by default `push` extracts from source and
+streams to the server — the client **never builds a local FTS** (that's the
+disk saving). If the remote is unreachable, `push` falls back to a
+**metadata-only local queue** (`~/.refcode/pending_sync.db`: slug + sha + path,
+**no** window text) and exits non-zero; when the remote returns, `sync flush`
+re-extracts from the still-present source and re-pushes each queued project,
+then clears the queue. `sync status` shows what's queued.
+
+**Bun gotchas (found & fixed here):** (1) `Bun.serve` does **not** auto-decompress
+`Content-Encoding: gzip` request bodies — the server must `gunzipSync` the raw
+bytes manually (else gzip pushes parse to nothing). (2) `req.json()` is a
+Promise — `await` it. (3) `bun:sqlite` array binding fails for multi-placeholder
+queries and inside transactions — use positional args everywhere (see the
+`mechanisms-server` note above).
 
 **Bun + array-binding gotcha** (found & fixed here): `bun:sqlite` does **not**
 bind an array of values to multiple `?` placeholders — it silently produces

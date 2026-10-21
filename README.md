@@ -13,6 +13,9 @@ refcode/
 │   ├── mechanisms.py         ← mechanism knowledge CLI (build/list/show/recommend) — pure stdlib
 │   ├── mechanisms-server.ts  ← Bun HTTP service over mechanisms.db (cross-platform)
 │   ├── mechanisms.db         ← SEED knowledge base (27 mechs + 155 code anchors + 1262 fused projects + 13 scenes)
+│   ├── refcode-server.ts     ← Bun HTTP service: remote code-corpus store + retrieval (multi-user, WAL)
+│   ├── refcode_sync.py       ← remote-first sync client: push/verify/clear/flush (no local 15GB FTS)
+│   ├── refcode-sync.py       ← thin wrapper so `python3 refcode-sync.py` keeps working
 │   ├── refcode               ← bash launcher (prefers local .venv, falls back to python3)
 │   ├── references/refcode.sql
 │   └── seed/corpora.json
@@ -29,7 +32,7 @@ refcode/
 
 ## What's inside
 
-### `refcode` skill — two independent capabilities
+### `refcode` skill — three independent capabilities
 
 1. **Reference-code retrieval** (`refcode.py`): index open-source projects into a
    searchable SQLite corpus (`ref_symbols` + `ref_body_fts`), so an agent can
@@ -46,6 +49,18 @@ refcode/
 
    - CLI: `mechanisms build|list|show <id>|recommend "<scene>" -k N|impl|scene`
    - HTTP service: `mechanisms-server.ts` exposes query + concurrent `POST /ingest`.
+
+3. **Remote-first sync** (`refcode_sync.py` + `refcode-server.ts`): push the code
+   corpus to a **remote server** and clear the local 15GB FTS index (the disk saver).
+   Local `sync push <slug> <path>` extracts **derived data only** (symbols + window text,
+   gzipped) from source — it never builds the giant local trigram index — streams it to
+   `refcode-server.ts`, which rebuilds the FTS remotely and answers `/query` + `/def`.
+   On a remote outage the push falls back to a **metadata-only queue** (no window text;
+   re-extracts from source on `flush`). Multi-user concurrent via SQLite WAL.
+
+   - CLI: `sync push <slug> <path> --licence` | `sync verify <slug>` | `sync clear <slug>` |
+     `sync flush` | `sync status`
+   - Server: `refcode-server.ts` (Bun, cross-platform) — see **Option C** below.
 
 ### `repo-map` skill — full OSS project analysis pipeline
 
@@ -149,6 +164,45 @@ export ANALYSIS_DB=/path/to/analysis.db      # repo-map analysis db (~2.6M)
 export MECH_DB=/path/to/mechanisms.db        # target
 ./refcode mechanisms build
 ```
+
+### Option C — remote code-corpus server + sync client (the disk saver)
+
+If disk is tight, run a **remote `refcode-server.ts`** and let clients push derived data
+to it instead of building a local 15GB FTS index. The server holds the corpus; a local
+`sync push` extracts symbols + window text from source (gzipped), streams it over HTTP,
+then the client can **clear its local index + source** after verification.
+
+```bash
+# on the server host (Linux/macOS/Windows, needs Bun):
+bun refcode/refcode-server.ts --port 8788
+#   default DB: ~/.refcode/remote/refcode.db  (Windows: %USERPROFILE%\.refcode\remote\refcode.db)
+#   listens on 0.0.0.0 by default (set REFCODE_HOSTNAME to restrict)
+
+# on any client, push a project from its source (no local FTS built):
+export REFCODE_HOST=http://<server>:8788
+python3 refcode_sync.py push <slug> <path> --licence MIT   # extract + gzip + stream + verify
+python3 refcode_sync.py verify <slug>                      # confirm syms/windows/files match
+python3 refcode_sync.py clear <slug>                       # delete local source + local rows (remote intact)
+# after pushing everything, remove the big local index:
+rm ~/.refcode/refcode.db                                   # the local 15GB FTS — no longer needed
+```
+
+Server endpoints:
+
+| method | path | what it does |
+|---|---|---|
+| `GET` | `/projects` | list indexed projects (slug, files, sym/window counts) |
+| `GET` | `/projects/<slug>/manifest` | per-project sha + symbol/window/file counts (verify) |
+| `POST` | `/projects/<slug>/push` | one-transaction upsert + per-project FTS rebuild from window text |
+| `GET` | `/query?text=...&k=...` | search symbols + body windows |
+| `GET` | `/def?symbol=...` | exact symbol definition (file + line + signature) |
+| `*` | mechanisms endpoints | the same mechanism DB endpoints as Option B (same port) |
+
+Failure model: on a remote outage `push` writes a **metadata-only** pending entry
+(`~/.refcode/pending_sync.db` — slug/sha/path, **no window text**); `sync flush`
+re-pushes from source once the remote is back. Concurrency: SQLite WAL + busy_timeout;
+N clients pushing the same slug converge to last-write-wins, crash-safe (a project is
+fully replaced or unchanged).
 
 ---
 
