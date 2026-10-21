@@ -134,6 +134,13 @@ def extract_to_jsonl(slug: str, path: Path, url: str, sha: str, licence: str):
 # --------------------------------------------------------------------------- #
 # HTTP helpers
 # --------------------------------------------------------------------------- #
+# The refcode server is a LAN service, not a public website: bypass any system
+# proxy (http_proxy / HTTPS_PROXY / no_proxy) that urllib would otherwise honor.
+# Without this, a proxy-configured host routes /projects/<s>/push through e.g.
+# Privoxy, which 500s on the gzip body instead of forwarding to the server.
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _post(host: str, url_path: str, body: bytes, gz: bool = False) -> dict:
     headers = {"Content-Type": "application/x-ndjson; charset=utf-8"}
     if gz:
@@ -141,12 +148,12 @@ def _post(host: str, url_path: str, body: bytes, gz: bool = False) -> dict:
     req = urllib.request.Request(host + url_path, data=body, headers=headers,
                                  method="POST")
     timeout = int(os.environ.get("REFCODE_PUSH_TIMEOUT", "600"))
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _opener.open(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 def _get(host: str, url_path: str) -> dict:
     req = urllib.request.Request(host + url_path, method="GET")
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with _opener.open(req, timeout=60) as r:
         return json.loads(r.read().decode("utf-8"))
 
 def _manifest(host: str, slug: str) -> dict:
