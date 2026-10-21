@@ -140,7 +140,8 @@ def _post(host: str, url_path: str, body: bytes, gz: bool = False) -> dict:
         headers["Content-Encoding"] = "gzip"
     req = urllib.request.Request(host + url_path, data=body, headers=headers,
                                  method="POST")
-    with urllib.request.urlopen(req, timeout=120) as r:
+    timeout = int(os.environ.get("REFCODE_PUSH_TIMEOUT", "600"))
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 def _get(host: str, url_path: str) -> dict:
