@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual envs (tree-sitter grammars are machine-specific, rebuilt at install)
+.venv/
+venv/
+env/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Refcode runtime data — generated, never committed (seed mechanisms.db is)
+*.db-wal
+*.db-shm
+refcode.db
+analysis.db
+repos/
