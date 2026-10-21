@@ -102,7 +102,7 @@ the step that makes the deliverables self-grounded (peer comparison later can
 `refcode def/query` the real code, not the README).
 
 ```bash
-R=/root/.agents/skills/refcode/refcode            # shared DB: ~/.refcode/refcode.db -> /root/.sisyphus/db/refcode.db
+R=/root/.agents/skills/refcode/refcode
 SLUG=<repo-basename-lowercased>                   # e.g. ai-scientist-v3
 REPO=<absolute path to the analyzed project>
 
@@ -112,15 +112,30 @@ REPO=<absolute path to the analyzed project>
 #    c) fall back to the licence recorded in Op2 profile
 LICENCE=<spdx-id>                                 # e.g. Apache-2.0
 
-# 2) index (idempotent: re-indexing the same slug refreshes it)
-$R index "$SLUG" "$REPO" --licence "$LICENCE"
+# 2) index. Choose the source of truth by env:
+#    REMOTE-FIRST (disk-saving, default when REFCODE_HOST is set): stream the
+#    analyzed project to the remote refcode-server — the server rebuilds the FTS
+#    from the pushed window text, so this machine NEVER builds a 15G local DB.
+#    LOCAL (no REFCODE_HOST): build the shared local DB (fallback/offline).
+if [ -n "$REFCODE_HOST" ]; then
+  # pushes <slug> to $REFCODE_HOST; local failure-fallback queues it
+  $R sync push "$SLUG" "$REPO" --licence "$LICENCE" --host "$REFCODE_HOST"
+else
+  # index (idempotent: re-indexing the same slug refreshes it)
+  $R index "$SLUG" "$REPO" --licence "$LICENCE"
+fi
 
 # 3) fix the heuristic domain if it misclassifies (classify reads lockfiles +
 #    name hints; a python agent framework with a frontend dir can come out
-#    "web-framework"). Export, correct, re-add:
-$R corpus export > /tmp/corpus.json
-#   edit <slug>.domain to a taxonomy-fitting label (e.g. agentic-ai4s)
-$R corpus add --from /tmp/corpus_fixed.json
+#    "web-framework"). Remote-first: POST /ingest (mechanisms) after pushing;
+#    the server already fused code. Local: export, correct, re-add.
+if [ -n "$REFCODE_HOST" ]; then
+  : # domain fix via POST /ingest on the server (mechanism fusion), no local corpus
+else
+  $R corpus export > /tmp/corpus.json
+  #   edit <slug>.domain to a taxonomy-fitting label (e.g. agentic-ai4s)
+  $R corpus add --from /tmp/corpus_fixed.json
+fi
 
 # 4) prove it is queryable — one smoke query must return a real file:line
 $R def <a-core-symbol>                            # must resolve to <path>:<line>
@@ -130,9 +145,9 @@ $R def <a-core-symbol>                            # must resolve to <path>:<line
 
 ```bash
 python3 /root/.agents/skills/repo-map/harness/gates.py g6 --repo "$REPO"
-#   exit 0 = PASS      (ref_projects row live + a real ref_symbols hit)
-#   exit 1 = FAIL      -> refcode index <slug> "$REPO" --licence <SPDX>, re-run g6
-#   exit 2 = BLOCKED   -> refcode DB missing; record BLOCKED, never silently skip
+#   exit 0 = PASS      (remote: project on server + symbols; local: ref_projects live + a real ref_symbols hit)
+#   exit 1 = FAIL      -> remote: `refcode sync push <slug> "$REPO" --host $REFCODE_HOST`; local: `refcode index <slug> "$REPO" --licence <SPDX>`; re-run g6
+#   exit 2 = BLOCKED   -> source of truth missing (local DB absent) or remote unreachable; record BLOCKED, never silently skip
 python3 /root/.agents/skills/repo-map/harness/refresh_state.py gate g6 --out <run-dir> --result PASS
 ```
 
