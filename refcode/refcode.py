@@ -212,6 +212,7 @@ SKIP_DIRS = {
     "vendor", "third_party", ".venv", "venv", "env", "__pycache__", ".mypy_cache",
     ".pytest_cache", ".ruff_cache", ".tox", ".idea", ".vscode", "coverage",
     ".codegraph", ".next", ".nuxt", ".cache", "bazel-out", "Pods", "DerivedData",
+    "data", "Data", "dataset", "datasets", "checkpoints", "Ckpt",
 }
 SKIP_FILE_RE = re.compile(r"(\.min\.(js|css)$|\.map$|\.lock$|package-lock\.json$|"
                           r"Cargo\.lock$|yarn\.lock$|pnpm-lock\.yaml$|\.snap$|"
