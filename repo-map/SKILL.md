@@ -125,8 +125,10 @@ already has.
 > ```bash
 > # run this BEFORE copying/pushing any doc — anchors must be queryable first
 > python3 /root/.agents/skills/repo-map/harness/gates.py g6 --repo "$REPO"   # 0=PASS 1=FAIL 2=BLOCKED
-> # on 1 (FAIL): refcode index <slug> "$REPO" --licence <SPDX>   then re-run g6
-> # on 2 (BLOCKED): refcode DB missing -> report BLOCKED, do not silently skip
+> # g6 source of truth follows $REFCODE_HOST: set -> checks the REMOTE refcode-server
+> #   (analyzed project must be pushed there); unset -> checks the local DB.
+> # on 1 (FAIL): remote -> `refcode sync push <slug> "$REPO" --host $REFCODE_HOST`; local -> `refcode index <slug> "$REPO" --licence <SPDX>`; re-run g6
+> # on 2 (BLOCKED): local DB absent OR remote unreachable -> report BLOCKED, do not silently skip
 > ```
 
 **Gate protocol (every op, identical):**
@@ -291,7 +293,7 @@ ends with a completion block — **success AND failure alike**:
 ═══ repo-map 完成 ═══
 result: <SUCCESS / PARTIAL / FAILED / ABORTED>
 · 5 op gate verdicts: Q1–Q5 (<PASS×N> / <FAIL×M>) · 6 harness gates: g1–g6 (<PASS×N> / <FAIL×M>) · 无待确认项 · 产物路径
-· refcode 索引: <slug> → <n> 符号 / <n> 窗口 (licence <SPDX>, domain <domain>) · smoke: def <sym> → <path>:<line>
+· refcode 索引: <slug> → <n> 符号 / <n> 窗口 (licence <SPDX>, domain <domain>) · smoke: def <sym> → <path>:<line> · 同步: $REFCODE_HOST 设则已 push 远程服务
 · 分类归属: <paradigm_id 名称 (A 轴 bin，来自 Op3 taxonomy 分类)>
 · 应用建议: 生态地图→<landscape 文档路径> · 生态位置→<单项目分析文档 §七>
 ·           关键缺口→<缺口分析/<project>的缺口和机会分析.md>   (摘要+指针，见下)

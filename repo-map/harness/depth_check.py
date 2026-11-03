@@ -49,8 +49,9 @@ SOURCE_EXTS = {
 # Match `path/file.py:123`, `path:file.ts:12:6`, `file.rs L60-82`, `file.rs:45-60`.
 # Group 1 = file path (may contain colons, so use a greedy-but-bounded approach).
 ANCHOR_RE = re.compile(
-    r"(?<!\w)"                          # no preceding word char
-    r"([A-Za-z0-9_./~-]+\.(?:tsx|jsx|mjs|cjs|ts|js|py|rs|go|java|kt|rb|php|cs|c|h|cpp|hpp|cc|cxx|sh|sql|json|toml|yaml|yml|md))"
+    r"(?<!\w)"
+    r"([A-Za-z0-9_./~-]+\.(?:tsx|jsx|mjs|cjs|json|toml|yaml|yml|java|cpp|hpp|cxx|php|sql|ts|js|py|rs|go|kt|rb|cs|cc|sh|md|c|h))"
+    r"(?![A-Za-z0-9_])"
     r"(?:\s*[:@]\s*(\d+)(?:\s*[-–]\s*(\d+))?(?:\s*[:.]\s*(\d+))?\s*|"
     r"\s+[Ll](\d+)(?:\s*[-–]\s*(\d+))?\s*|"
     r"\s*\b(?:L|line)\s*(\d+)\s*)?"
