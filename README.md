@@ -172,19 +172,39 @@ to it instead of building a local 15GB FTS index. The server holds the corpus; a
 `sync push` extracts symbols + window text from source (gzipped), streams it over HTTP,
 then the client can **clear its local index + source** after verification.
 
+**Sharded storage (scales to thousands of projects / 1TB+).** The corpus is split per
+project: every slug lives in its own SQLite WAL shard under `shards/<slug>.db`
+(`ref_symbols` + trigram `ref_body_fts` + `ref_docs`), and a small **catalog db**
+(`catalog.db`) keeps one row per project + the `push_log`. Listing (`/projects`) and
+`/health` read only the catalog, so they stay fast as projects multiply. Trigram is
+preserved (CJK + sub-string matching). Queries are scoped per project; a global query
+fans out across shards in parallel (`SHARD_CONCURRENCY`, default 4).
+
 ```bash
 # on the server host (Linux/macOS/Windows, needs Bun):
 bun refcode/refcode-server.ts --port 8788
-#   default DB: ~/.refcode/remote/refcode.db  (Windows: %USERPROFILE%\.refcode\remote\refcode.db)
-#   listens on 0.0.0.0 by default (set REFCODE_HOSTNAME to restrict)
+#   default catalog:  ~/.refcode/remote/catalog.db   (Windows: %USERPROFILE%\.refcode\remote\catalog.db)
+#   default shards:   ~/.refcode/remote/shards/      (set REFCODE_SHARDS to override)
+#   REFCODE_DB / REFCODE_SHARDS env vars also work. Listens on 0.0.0.0 by default
+#   (set REFCODE_HOSTNAME to restrict).
 
 # on any client, push a project from its source (no local FTS built):
 export REFCODE_HOST=http://<server>:8788
 python3 refcode_sync.py push <slug> <path> --licence MIT   # extract + gzip + stream + verify
 python3 refcode_sync.py verify <slug>                      # confirm syms/windows/files match
 python3 refcode_sync.py clear <slug>                       # delete local source + local rows (remote intact)
-# after pushing everything, remove the big local index:
-rm ~/.refcode/refcode.db                                   # the local 15GB FTS — no longer needed
+```
+
+**Migrating from the legacy single-file DB → shards (one-time).** If you ran an older
+`refcode-server.ts` that kept everything in one `~/.refcode/remote/refcode.db`, split it
+into the catalog + shards with the included migration tool (leaves the old file in place;
+remove it after verifying the sharded server). Idempotent — re-running skips shards that
+already exist:
+
+```bash
+# stop the server, then:
+bun refcode/migrate-shards.ts     # --src <legacy.db> --catalog <catalog.db> --shards <dir>
+# restart the server.
 ```
 
 Server endpoints:
